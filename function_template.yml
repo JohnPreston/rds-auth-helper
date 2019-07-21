@@ -1,0 +1,128 @@
+---
+# TEMPLATE GENERATED VIA COOKIECUTTER. ADAPT ACCORDINGLY
+
+Transform:
+  - AWS::Serverless-2016-10-31
+
+Description: Template for function pgsql-auth-helper
+Parameters:
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+Resources:
+  MasterSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: String
+      GenerateSecretString:
+        ExcludeCharacters: '<>%`|;,.'
+        ExcludePunctuation: True
+        ExcludeLowercase: False
+        ExcludeUppercase: False
+        IncludeSpace: False
+        RequireEachIncludedType: True
+        PasswordLength: 32
+        SecretStringTemplate: '{"username": "default"}'
+        GenerateStringKey: password
+      Name: !Sub '${AWS::StackName}/MasterSecret'
+
+  MasterSecretPolicy:
+    Type: AWS::SecretsManager::ResourcePolicy
+    Properties:
+      SecretId: !Ref MasterSecret
+      ResourcePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecret*
+            Resource: ['*']
+            Condition:
+              ForAnyValue:StringEquals:
+                secretsmanager:VersionStage: AWSCURRENT
+            Principal:
+              AWS:
+                !GetAtt LambdaFunctionRole.Arn
+
+  ApplicationSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: String
+      GenerateSecretString:
+        ExcludeCharacters: '<>%`|;,.'
+        ExcludePunctuation: True
+        ExcludeLowercase: False
+        ExcludeUppercase: False
+        IncludeSpace: False
+        RequireEachIncludedType: True
+        PasswordLength: 32
+        SecretStringTemplate: !Sub '{"username": "${AWS::StackName}"}'
+        GenerateStringKey: password
+      Name: !Sub '${AWS::StackName}/ApplicationSecret'
+
+  ApplicationSecretPolicy:
+    Type: AWS::SecretsManager::ResourcePolicy
+    Properties:
+      SecretId: !Ref ApplicationSecret
+      ResourcePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecret*
+            Resource: ['*']
+            Condition:
+              ForAnyValue:StringEquals:
+                secretsmanager:VersionStage: AWSCURRENT
+            Principal:
+              AWS:
+                !GetAtt LambdaFunctionRole.Arn
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security group for sg-psql-auth-helper'
+      GroupName: !Sub 'psql-auth-helper-${AWS::StackName}'
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: '-1'
+          FromPort: '-1'
+          ToPort: '-1'
+      VpcId: !Ref VpcId
+
+  LambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: pgsql-auth-helper.zip
+      AutoPublishAlias: 'live'
+      Handler: function.lambda_handler
+      Layers:
+        - arn:aws:lambda:eu-west-1:373709687836:layer:awslambda-handler:1
+      MemorySize: 256
+      Role: !GetAtt 'LambdaFunctionRole.Arn'
+      Runtime: python3.7
+      Timeout: 30
+      FunctionName: !Ref 'AWS::NoValue'
+  LambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Policies:
+        - PolicyName: DecryptWithKms
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action: kms:Decrypt
+                Effect: Allow
+                Resource: ['*']
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - !Sub 'lambda.${AWS::URLSuffix}'
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
