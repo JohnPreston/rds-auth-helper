@@ -1,0 +1,14 @@
+[
+    {
+	"ParameterKey": "VpcId",
+	"ParameterValue": ""
+    },
+    {
+	"ParameterKey": "StorageSubnetIds",
+	"ParameterValue": ""
+    },
+    {
+	"ParameterKey": "AppSubnetIds",
+	"ParameterValue": ""
+    }
+]

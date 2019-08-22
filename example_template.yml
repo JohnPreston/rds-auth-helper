@@ -1,0 +1,201 @@
+Transform:
+- AWS::Serverless-2016-10-31
+Description: Template for function pgsql-auth-helper
+Parameters:
+  StorageSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  AppSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+Resources:
+  MasterSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: String
+      GenerateSecretString:
+        ExcludeCharacters: <>%`|;,.
+        ExcludePunctuation: true
+        ExcludeLowercase: false
+        ExcludeUppercase: false
+        IncludeSpace: false
+        RequireEachIncludedType: true
+        PasswordLength: 32
+        SecretStringTemplate: '{"username": "toor"}'
+        GenerateStringKey: password
+      Name:
+        Fn::Sub: ${AWS::StackName}/MasterSecret
+  MasterSecretPolicy:
+    Type: AWS::SecretsManager::ResourcePolicy
+    Properties:
+      SecretId:
+        Ref: MasterSecret
+      ResourcePolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: secretsmanager:GetSecret*
+            Resource:
+              - !Ref MasterSecret
+            Principal:
+              AWS:
+                - !GetAtt LambdaFunctionRole.RoleId
+
+  SecretRDSInstanceAttachment:
+    Type: "AWS::SecretsManager::SecretTargetAttachment"
+    Properties:
+      SecretId: !Ref MasterSecret
+      TargetId: !Ref RdsInstance
+      TargetType: AWS::RDS::DBInstance
+
+
+  RdsInstanceSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Group for the rds auth helper dev'
+      GroupName: !Sub 'rds-auth-helper-group'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          IpProtocol: '-1'
+          FromPort: '-1'
+          ToPort: '-1'
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !GetAtt 'LambdaSecurityGroup.GroupId'
+          SourceSecurityGroupOwnerId: !Ref 'AWS::AccountId'
+          FromPort: '5432'
+          IpProtocol: tcp
+          ToPort: '5432'
+
+
+  RdsInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 20
+      DBInstanceClass: db.t2.micro
+      Engine: postgres
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref MasterSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref MasterSecret, ':SecretString:password}}' ]]
+      BackupRetentionPeriod: 0
+      DBInstanceIdentifier: !Sub 'test-${AWS::StackName}'
+      DBSubnetGroupName: !Ref RdsInstanceSubnets
+      VPCSecurityGroups:
+        - !GetAtt 'RdsInstanceSg.GroupId'
+
+  RdsInstanceSubnets:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: 'Subnet for testing the RDS Auth Helper'
+      SubnetIds:
+        !Ref StorageSubnetIds
+      Tags:
+        - Key: Name
+          Value: rds-auth-helper
+
+  ApplicationSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: String
+      GenerateSecretString:
+        ExcludeCharacters: <>%`|;,.
+        ExcludePunctuation: true
+        ExcludeLowercase: false
+        ExcludeUppercase: false
+        IncludeSpace: false
+        RequireEachIncludedType: true
+        PasswordLength: 32
+        SecretStringTemplate:
+          Fn::Sub: '{"username": "applicationa123"}'
+        GenerateStringKey: password
+      Name:
+        Fn::Sub: ${AWS::StackName}/ApplicationSecret
+
+  ApplicationSecretPolicy:
+    Type: AWS::SecretsManager::ResourcePolicy
+    Properties:
+      SecretId:
+        Ref: ApplicationSecret
+      ResourcePolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: secretsmanager:Get*
+            Resource:
+              - !Ref ApplicationSecret
+            Principal:
+              AWS:
+                - !GetAtt LambdaFunctionRole.RoleId
+
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for sg-psql-auth-helper
+      GroupName:
+        Fn::Sub: psql-auth-helper-${AWS::StackName}
+      SecurityGroupEgress:
+      - CidrIp: 0.0.0.0/0
+        IpProtocol: '-1'
+        FromPort: '-1'
+        ToPort: '-1'
+      VpcId:
+        Ref: VpcId
+
+  LambdaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      VpcConfig:
+        SubnetIds: !Ref AppSubnetIds
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+      CodeUri: pgsql-auth-helper.zip
+      AutoPublishAlias: live
+      Handler: function.lambda_handler
+      Layers:
+        - arn:aws:lambda:eu-west-1:373709687836:layer:requests:1
+        - arn:aws:lambda:eu-west-1:373709687836:layer:pg8000:1
+      MemorySize: 256
+      Role:
+        Fn::GetAtt:
+        - LambdaFunctionRole
+        - Arn
+      Runtime: python3.7
+      Timeout: 30
+      FunctionName:
+        Ref: AWS::NoValue
+
+  LambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Policies:
+      - PolicyName: DecryptWithKms
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action: kms:Decrypt
+            Effect: Allow
+            Resource:
+            - '*'
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - Fn::Sub: lambda.${AWS::URLSuffix}
+        Version: '2012-10-17'
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+      - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+
+  LambdaExecution:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn:
+      - LambdaFunction
+      - RdsInstance
+    Properties:
+      ServiceToken: !Ref 'LambdaFunction.Alias'
+      StackName: !Ref 'AWS::StackName'
+      MasterPasswordArn: !Ref MasterSecret
+      AppPasswordArn: !Ref ApplicationSecret
+      SchemaName: applicationname

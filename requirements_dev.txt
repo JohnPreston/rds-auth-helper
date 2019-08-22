@@ -2,3 +2,4 @@ awscli
 boto3
 ozone
 psycopg2
+awslambda-handler

@@ -7,3 +7,5 @@
 .venv*
 !function_config.yml
 !function_template.yml
+!example_template.yml
+!example_params.json
